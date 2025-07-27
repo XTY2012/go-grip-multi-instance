@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -93,7 +94,13 @@ func (s *Server) Serve(file string) error {
 		}
 	})
 
-	addr := fmt.Sprintf("http://%s:%d/", s.host, s.port)
+	// Try to find an available port, starting with the requested one
+	listener, actualPort, err := s.findAvailablePort()
+	if err != nil {
+		return fmt.Errorf("failed to find available port: %w", err)
+	}
+
+	addr := fmt.Sprintf("http://%s:%d/", s.host, actualPort)
 	if file == "" {
 		// If README.md exists then open README.md at beginning
 		readme := "README.md"
@@ -118,7 +125,7 @@ func (s *Server) Serve(file string) error {
 	}
 
 	handler := reload.Handle(http.DefaultServeMux)
-	return http.ListenAndServe(fmt.Sprintf(":%d", s.port), handler)
+	return http.Serve(listener, handler)
 }
 
 func readToString(dir http.Dir, filename string) ([]byte, error) {
@@ -160,4 +167,35 @@ func getCssCode(style string) string {
 	s := styles.Get(style)
 	_ = formatter.WriteCSS(buf, s)
 	return buf.String()
+}
+
+// findAvailablePort tries to listen on the requested port first,
+// if that fails, it tries to find any available port
+func (s *Server) findAvailablePort() (net.Listener, int, error) {
+	// First, try the requested port
+	addr := fmt.Sprintf("%s:%d", s.host, s.port)
+	listener, err := net.Listen("tcp", addr)
+	if err == nil {
+		// Successfully bound to the requested port
+		return listener, s.port, nil
+	}
+
+	// If the requested port is in use, find an available one
+	fmt.Printf("⚠️  Port %d is already in use, finding an available port...\n", s.port)
+	
+	// Try to bind to port 0, which lets the OS assign an available port
+	addr = fmt.Sprintf("%s:0", s.host)
+	listener, err = net.Listen("tcp", addr)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Get the actual port that was assigned
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		listener.Close()
+		return nil, 0, fmt.Errorf("failed to get TCP address")
+	}
+
+	return listener, tcpAddr.Port, nil
 }
