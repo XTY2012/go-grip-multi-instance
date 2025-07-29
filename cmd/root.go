@@ -8,8 +8,9 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "go-grip [file]",
-	Short: "Render markdown document as html",
+	Use:   "go-grip [path]",
+	Short: "Render markdown documents as html",
+	Long:  `Render markdown documents as html. Can handle a single file or a directory of markdown files.`,
 	Args:  cobra.MatchAll(cobra.OnlyValidArgs),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		theme, _ := cmd.Flags().GetString("theme")
@@ -18,14 +19,16 @@ var rootCmd = &cobra.Command{
 		port, _ := cmd.Flags().GetInt("port")
 		boundingBox, _ := cmd.Flags().GetBool("bounding-box")
 
-		var file string
+		var path string
 		if len(args) == 1 {
-			file = args[0]
+			path = args[0]
+		} else {
+			path = "."
 		}
 
 		parser := pkg.NewParser(theme)
 		server := pkg.NewServer(host, port, theme, boundingBox, browser, parser)
-		return server.Serve(file)
+		return server.Serve(path)
 	},
 }
 
