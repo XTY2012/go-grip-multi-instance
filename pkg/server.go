@@ -7,8 +7,9 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
@@ -39,9 +40,36 @@ func NewServer(host string, port int, theme string, boundingBox bool, browser bo
 	}
 }
 
-func (s *Server) Serve(file string) error {
-	directory := path.Dir(file)
-	filename := path.Base(file)
+func (s *Server) Serve(inputPath string) error {
+	var directory string
+	var initialFile string
+
+	// Check if input is a file or directory
+	info, err := os.Stat(inputPath)
+	if err != nil {
+		// If file doesn't exist, check if parent directory exists
+		directory = path.Dir(inputPath)
+		initialFile = path.Base(inputPath)
+		if _, err := os.Stat(directory); err != nil {
+			return fmt.Errorf("path not found: %s", inputPath)
+		}
+	} else if info.IsDir() {
+		directory = inputPath
+		// Look for README.md as default
+		if _, err := os.Stat(filepath.Join(directory, "README.md")); err == nil {
+			initialFile = "README.md"
+		}
+	} else {
+		directory = path.Dir(inputPath)
+		initialFile = path.Base(inputPath)
+	}
+
+	// Convert to absolute path for consistent handling
+	absDir, err := filepath.Abs(directory)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path: %w", err)
+	}
+	directory = absDir
 
 	reload := reload.New(directory)
 	reload.DebugLog = log.New(io.Discard, "", 0)
@@ -56,26 +84,53 @@ func (s *Server) Serve(file string) error {
 	dir := http.Dir(directory)
 	chttp := http.NewServeMux()
 	chttp.Handle("/static/", http.FileServer(http.FS(defaults.StaticFiles)))
-	chttp.Handle("/", http.FileServer(dir))
 
 	// Regex for markdown
 	regex := regexp.MustCompile(`(?i)\.md$`)
 
 	// Serve website with rendered markdown
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		f, err := dir.Open(r.URL.Path)
+		urlPath := r.URL.Path
+
+		// Remove leading slash and clean the path
+		if urlPath == "/" || urlPath == "" {
+			if initialFile != "" {
+				urlPath = "/" + initialFile
+			} else {
+				// Try to find a README.md
+				urlPath = "/README.md"
+			}
+		}
+
+		// Check if the path ends with a directory, look for README.md
+		fullPath := filepath.Join(directory, strings.TrimPrefix(urlPath, "/"))
+		if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
+			// Look for README.md in the directory
+			readmePath := filepath.Join(fullPath, "README.md")
+			if _, err := os.Stat(readmePath); err == nil {
+				// Redirect to the README.md
+				relativePath, _ := filepath.Rel(directory, readmePath)
+				http.Redirect(w, r, "/"+filepath.ToSlash(relativePath), http.StatusFound)
+				return
+			}
+		}
+
+		// Try to open the file
+		f, err := dir.Open(urlPath)
 		if err == nil {
 			defer f.Close()
 		}
 
-		if err == nil && regex.MatchString(r.URL.Path) {
+		if err == nil && regex.MatchString(urlPath) {
 			// Open file and convert to html
-			bytes, err := readToString(dir, r.URL.Path)
+			bytes, err := readToString(dir, urlPath)
 			if err != nil {
-				log.Fatal(err)
+				http.Error(w, "Failed to read file", http.StatusInternalServerError)
 				return
 			}
-			htmlContent := s.parser.MdToHTML(bytes)
+
+			// Parse markdown with link transformation
+			htmlContent := s.parseMarkdownWithLinks(bytes, urlPath)
 
 			// Serve
 			err = serveTemplate(w, htmlStruct{
@@ -86,7 +141,7 @@ func (s *Server) Serve(file string) error {
 				CssCodeDark:  getCssCode("github-dark"),
 			})
 			if err != nil {
-				log.Fatal(err)
+				http.Error(w, "Failed to render template", http.StatusInternalServerError)
 				return
 			}
 		} else {
@@ -101,18 +156,8 @@ func (s *Server) Serve(file string) error {
 	}
 
 	addr := fmt.Sprintf("http://%s:%d/", s.host, actualPort)
-	if file == "" {
-		// If README.md exists then open README.md at beginning
-		readme := "README.md"
-		f, err := dir.Open(readme)
-		if err == nil {
-			defer f.Close()
-		}
-		if err == nil {
-			addr, _ = url.JoinPath(addr, readme)
-		}
-	} else {
-		addr, _ = url.JoinPath(addr, filename)
+	if initialFile != "" {
+		addr = fmt.Sprintf("%s%s", addr, initialFile)
 	}
 
 	fmt.Printf("🚀 Starting server: %s\n", addr)
@@ -169,6 +214,78 @@ func getCssCode(style string) string {
 	return buf.String()
 }
 
+// parseMarkdownWithLinks processes markdown content and transforms relative links
+func (s *Server) parseMarkdownWithLinks(content []byte, currentPath string) []byte {
+	// First, preprocess wiki-style links [[text]] -> [text](text.md)
+	processedContent := s.preprocessWikiLinks(content)
+
+	// Then parse the markdown to HTML
+	htmlContent := s.parser.MdToHTML(processedContent)
+
+	// Transform relative markdown links to work with our server
+	// This regex matches markdown links like [text](path.md)
+	linkRegex := regexp.MustCompile(`href="([^"]+\.md(?:#[^"]*)?)"`)
+
+	currentDir := path.Dir(currentPath)
+
+	transformed := linkRegex.ReplaceAllFunc(htmlContent, func(match []byte) []byte {
+		// Extract the link
+		submatch := linkRegex.FindSubmatch(match)
+		if len(submatch) < 2 {
+			return match
+		}
+
+		link := string(submatch[1])
+
+		// Handle absolute paths (starting with /)
+		if strings.HasPrefix(link, "/") {
+			return match
+		}
+
+		// Handle relative paths
+		// Resolve the path relative to the current file's directory
+		resolvedPath := path.Join(currentDir, link)
+
+		// Make sure the path starts with /
+		if !strings.HasPrefix(resolvedPath, "/") {
+			resolvedPath = "/" + resolvedPath
+		}
+
+		return []byte(fmt.Sprintf(`href="%s"`, resolvedPath))
+	})
+
+	return transformed
+}
+
+// preprocessWikiLinks converts [[wiki links]] to standard markdown links
+func (s *Server) preprocessWikiLinks(content []byte) []byte {
+	// Regex to match [[text]] patterns
+	wikiLinkRegex := regexp.MustCompile(`\[\[([^\]]+)\]\]`)
+
+	return wikiLinkRegex.ReplaceAllFunc(content, func(match []byte) []byte {
+		// Extract the text between [[ and ]]
+		submatch := wikiLinkRegex.FindSubmatch(match)
+		if len(submatch) < 2 {
+			return match
+		}
+
+		linkText := string(submatch[1])
+
+		// Convert to filename: lowercase, spaces to hyphens
+		filename := strings.ToLower(linkText)
+		filename = strings.ReplaceAll(filename, " ", "-")
+		// Handle multiple spaces or special characters
+		filename = regexp.MustCompile(`[^a-z0-9-]+`).ReplaceAllString(filename, "-")
+		// Remove leading/trailing hyphens
+		filename = strings.Trim(filename, "-")
+		// Collapse multiple hyphens
+		filename = regexp.MustCompile(`-+`).ReplaceAllString(filename, "-")
+
+		// Wiki links always resolve from root with leading slash
+		return []byte(fmt.Sprintf("[%s](/%s.md)", linkText, filename))
+	})
+}
+
 // findAvailablePort tries to listen on the requested port first,
 // if that fails, it tries to find any available port
 func (s *Server) findAvailablePort() (net.Listener, int, error) {
@@ -182,7 +299,7 @@ func (s *Server) findAvailablePort() (net.Listener, int, error) {
 
 	// If the requested port is in use, find an available one
 	fmt.Printf("⚠️  Port %d is already in use, finding an available port...\n", s.port)
-	
+
 	// Try to bind to port 0, which lets the OS assign an available port
 	addr = fmt.Sprintf("%s:0", s.host)
 	listener, err = net.Listen("tcp", addr)

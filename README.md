@@ -22,11 +22,14 @@ This project is a reimplementation of the original Python-based [grip](https://g
 
 - :zap: Written in Go :+1:
 - 📄 Render markdown to HTML and view it in your browser
+- 📁 **Multi-file support** - Serve entire directories of markdown files
+- 🔗 **Wiki-style links** - Use `[[Page Name]]` to link to `page-name.md`
 - 📱 Dark and light theme
 - 🎨 Syntax highlighting for code
 - [x] Todo list like the one on GitHub
 - Support for github markdown emojis :+1: :bowtie:
 - Support for mermaid diagrams
+- 🔄 Auto-reload on file changes
 
 ```mermaid
 graph TD;
@@ -39,14 +42,21 @@ graph TD;
 > [!TIP]
 > Support of blockquotes (note, tip, important, warning and caution) [see here](https://github.com/orgs/community/discussions/16925)
 
-> [!IMPORTANT]
->
-> test
 
 ## :rocket: Getting started
 
-To install go-grip, simply:
+### Quick Install
 
+```bash
+# Clone and install
+git clone https://github.com/chrishrb/go-grip.git
+cd go-grip
+./install.sh
+```
+
+### Alternative Installation Methods
+
+Using Go:
 ```bash
 go install github.com/chrishrb/go-grip@latest
 ```
@@ -57,32 +67,55 @@ go install github.com/chrishrb/go-grip@latest
 
 ## :hammer: Usage
 
-To render the `README.md` file simply execute:
+### Basic Usage
 
 ```bash
-go-grip README.md
-# or
+# Serve current directory (looks for README.md)
 go-grip
+
+# Serve a specific file
+go-grip README.md
+
+# Serve a documentation directory
+go-grip docs/
 ```
 
 The browser will automatically open on http://localhost:6419. You can disable this behaviour with the `-b=false` option.
 
-You can also specify a port:
+### Multi-File Documentation
 
-```bash
-go-grip -p 80 README.md
+When serving a directory, go-grip supports:
+- Automatic README.md detection as the starting page
+- Navigation between markdown files in subdirectories
+- Relative links between documents
+- Auto-reload when files change
+
+### Wiki-Style Links
+
+Use double brackets for easy cross-referencing:
+
+```markdown
+[[Getting Started]]     → links to /getting-started.md
+[[API Reference]]       → links to /api-reference.md
+[[My Complex Title!]]   → links to /my-complex-title.md
 ```
 
-or just open a file-tree with all available files in the current directory:
+Wiki links are:
+- Case insensitive
+- Convert spaces to hyphens
+- Always resolve from document root
+
+### Advanced Options
 
 ```bash
-go-grip -r=false
-```
+# Use custom port
+go-grip -p 8080 docs/
 
-It's also possible to activate the darkmode:
+# Disable browser auto-open
+go-grip -b=false
 
-```bash
-go-grip -d .
+# Set theme (light/dark/auto)
+go-grip --theme dark README.md
 ```
 
 To terminate the current server simply press `CTRL-C`.
