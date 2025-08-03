@@ -144,6 +144,23 @@ func (s *Server) Serve(inputPath string) error {
 				http.Error(w, "Failed to render template", http.StatusInternalServerError)
 				return
 			}
+		} else if err == nil {
+			// Serve static files from the markdown directory
+			// Check if it's an image or other static file
+			info, err := f.Stat()
+			if err != nil {
+				http.Error(w, "Failed to stat file", http.StatusInternalServerError)
+				return
+			}
+			
+			// Don't serve directories
+			if info.IsDir() {
+				http.Error(w, "Not Found", http.StatusNotFound)
+				return
+			}
+			
+			// Serve the file
+			http.ServeFile(w, r, filepath.Join(directory, strings.TrimPrefix(urlPath, "/")))
 		} else {
 			chttp.ServeHTTP(w, r)
 		}
