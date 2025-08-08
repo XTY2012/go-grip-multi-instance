@@ -57,10 +57,7 @@ func (s *Server) Serve(inputPath string) error {
 		}
 	} else if info.IsDir() {
 		directory = inputPath
-		// Look for README.md as default
-		if _, err := os.Stat(filepath.Join(directory, "README.md")); err == nil {
-			initialFile = "README.md"
-		}
+		// Don't set an initial file - show TOC by default
 	} else {
 		directory = path.Dir(inputPath)
 		initialFile = path.Base(inputPath)
