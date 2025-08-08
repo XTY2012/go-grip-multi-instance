@@ -16,6 +16,13 @@ go-grip is a lightweight Go tool for rendering Markdown files locally with GitHu
 - `make lint` - Run golangci-lint
 - `make all` - Format, lint, and build
 
+### Running go-grip
+- **IMPORTANT**: Always use Desktop Commander to run the go-grip server for proper session management
+- `./bin/go-grip [path]` - Run with a file or directory
+- `./bin/go-grip [path] -b=false` - Run without opening browser (NOT --no-browser)
+- `./bin/go-grip [path] -p 8080` - Run on custom port
+- `./bin/go-grip [path] --theme dark` - Run with specific theme
+
 ### Cross-compilation
 - `make compile` - Build for multiple platforms (darwin/linux/windows, amd64/arm64)
 

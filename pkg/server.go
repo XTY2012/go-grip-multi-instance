@@ -3,7 +3,6 @@ package pkg
 import (
 	"bytes"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -13,8 +12,9 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"time"
 
-	"github.com/aarol/reload"
+	// "github.com/aarol/reload"
 	chroma_html "github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/chrishrb/go-grip/defaults"
@@ -44,6 +44,8 @@ func (s *Server) Serve(inputPath string) error {
 	var directory string
 	var initialFile string
 
+	log.Printf("Starting server with inputPath: %s", inputPath)
+
 	// Check if input is a file or directory
 	info, err := os.Stat(inputPath)
 	if err != nil {
@@ -70,9 +72,12 @@ func (s *Server) Serve(inputPath string) error {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 	directory = absDir
+	log.Printf("Serving directory: %s, initial file: %s", directory, initialFile)
 
-	reload := reload.New(directory)
-	reload.DebugLog = log.New(io.Discard, "", 0)
+	// Configure reload with more conservative settings
+	// Temporarily disable reload for debugging
+	// reload := reload.New(directory)
+	// reload.DebugLog = log.New(io.Discard, "", 0)
 
 	validThemes := map[string]bool{"light": true, "dark": true, "auto": true}
 
@@ -90,6 +95,13 @@ func (s *Server) Serve(inputPath string) error {
 
 	// Serve website with rendered markdown
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Add connection timeout and error recovery
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("Recovered from panic: %v", err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
 		urlPath := r.URL.Path
 
 		// Remove leading slash and clean the path
@@ -162,7 +174,13 @@ func (s *Server) Serve(inputPath string) error {
 			// Serve the file
 			http.ServeFile(w, r, filepath.Join(directory, strings.TrimPrefix(urlPath, "/")))
 		} else {
-			chttp.ServeHTTP(w, r)
+			// If file not found and it's a static asset request, serve from embedded files
+			if strings.HasPrefix(urlPath, "/static/") {
+				chttp.ServeHTTP(w, r)
+			} else {
+				// For non-static files, return a proper 404
+				http.Error(w, "File not found", http.StatusNotFound)
+			}
 		}
 	})
 
@@ -186,8 +204,20 @@ func (s *Server) Serve(inputPath string) error {
 		}
 	}
 
-	handler := reload.Handle(http.DefaultServeMux)
-	return http.Serve(listener, handler)
+	// Create a server with timeouts to prevent connection exhaustion
+	server := &http.Server{
+		Handler:      http.DefaultServeMux, // Temporarily disable reload
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	
+	log.Printf("Starting HTTP server on %s", listener.Addr())
+	err = server.Serve(listener)
+	if err != nil {
+		log.Printf("Server error: %v", err)
+	}
+	return err
 }
 
 func readToString(dir http.Dir, filename string) ([]byte, error) {
