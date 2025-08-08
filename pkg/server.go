@@ -106,25 +106,65 @@ func (s *Server) Serve(inputPath string) error {
 
 		// Remove leading slash and clean the path
 		if urlPath == "/" || urlPath == "" {
-			if initialFile != "" {
-				urlPath = "/" + initialFile
-			} else {
-				// Try to find a README.md
-				urlPath = "/README.md"
-			}
-		}
-
-		// Check if the path ends with a directory, look for README.md
-		fullPath := filepath.Join(directory, strings.TrimPrefix(urlPath, "/"))
-		if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
-			// Look for README.md in the directory
-			readmePath := filepath.Join(fullPath, "README.md")
-			if _, err := os.Stat(readmePath); err == nil {
-				// Redirect to the README.md
-				relativePath, _ := filepath.Rel(directory, readmePath)
-				http.Redirect(w, r, "/"+filepath.ToSlash(relativePath), http.StatusFound)
+			// For root path, generate TOC for the entire directory
+			toc, err := ScanMarkdownFiles(directory)
+			if err != nil {
+				log.Printf("Error scanning directory: %v", err)
+				http.Error(w, "Failed to scan directory", http.StatusInternalServerError)
 				return
 			}
+
+			// Generate TOC markdown
+			tocMarkdown := GenerateTOCMarkdown(toc)
+			
+			// Parse the TOC markdown to HTML
+			htmlContent := s.parser.MdToHTML([]byte(tocMarkdown))
+			
+			// Serve the TOC page
+			err = serveTemplate(w, htmlStruct{
+				Content:      string(htmlContent),
+				Theme:        s.theme,
+				BoundingBox:  s.boundingBox,
+				CssCodeLight: getCssCode("github"),
+				CssCodeDark:  getCssCode("github-dark"),
+			})
+			if err != nil {
+				http.Error(w, "Failed to render template", http.StatusInternalServerError)
+				return
+			}
+			return
+		}
+
+		// Check if the path ends with a directory
+		fullPath := filepath.Join(directory, strings.TrimPrefix(urlPath, "/"))
+		if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
+			// Generate TOC for this subdirectory
+			toc, err := ScanMarkdownFiles(fullPath)
+			if err != nil {
+				log.Printf("Error scanning directory: %v", err)
+				http.Error(w, "Failed to scan directory", http.StatusInternalServerError)
+				return
+			}
+
+			// Generate TOC markdown
+			tocMarkdown := GenerateTOCMarkdown(toc)
+			
+			// Parse the TOC markdown to HTML with proper link transformation
+			htmlContent := s.parseMarkdownWithLinks([]byte(tocMarkdown), urlPath)
+			
+			// Serve the TOC page
+			err = serveTemplate(w, htmlStruct{
+				Content:      string(htmlContent),
+				Theme:        s.theme,
+				BoundingBox:  s.boundingBox,
+				CssCodeLight: getCssCode("github"),
+				CssCodeDark:  getCssCode("github-dark"),
+			})
+			if err != nil {
+				http.Error(w, "Failed to render template", http.StatusInternalServerError)
+				return
+			}
+			return
 		}
 
 		// Try to open the file
