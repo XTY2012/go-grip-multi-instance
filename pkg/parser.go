@@ -19,6 +19,7 @@ import (
 	"github.com/gomarkdown/markdown/ast"
 	"github.com/gomarkdown/markdown/html"
 	"github.com/gomarkdown/markdown/parser"
+	"gopkg.in/yaml.v3"
 )
 
 var blockquotes = []string{"Note", "Tip", "Important", "Warning", "Caution", "BlockQuote"}
@@ -27,24 +28,138 @@ type Parser struct {
 	theme string
 }
 
+// Frontmatter holds parsed frontmatter data
+type Frontmatter map[string]interface{}
+
 func NewParser(theme string) *Parser {
 	return &Parser{
 		theme: theme,
 	}
 }
 
-func (m Parser) MdToHTML(bytes []byte) []byte {
+func (m Parser) MdToHTML(content []byte) []byte {
+	// Extract frontmatter if present
+	cleanContent, frontmatter := extractFrontmatter(content)
+	
+	// Parse the markdown (without frontmatter)
 	extensions := parser.NoIntraEmphasis | parser.Tables | parser.FencedCode |
 		parser.Autolink | parser.Strikethrough | parser.SpaceHeadings | parser.HeadingIDs |
 		parser.BackslashLineBreak | parser.MathJax | parser.OrderedListStart
 	p := parser.NewWithExtensions(extensions)
-	doc := p.Parse(bytes)
+	doc := p.Parse(cleanContent)
 
 	htmlFlags := html.CommonFlags
 	opts := html.RendererOptions{Flags: htmlFlags, RenderNodeHook: m.renderHook}
 	renderer := html.NewRenderer(opts)
 
-	return markdown.Render(doc, renderer)
+	renderedMarkdown := markdown.Render(doc, renderer)
+	
+	// If we have frontmatter, render it and prepend to the content
+	if frontmatter != nil {
+		frontmatterHTML := renderFrontmatter(frontmatter)
+		return append(frontmatterHTML, renderedMarkdown...)
+	}
+	
+	return renderedMarkdown
+}
+
+// extractFrontmatter extracts YAML frontmatter from markdown content
+func extractFrontmatter(content []byte) ([]byte, Frontmatter) {
+	contentStr := string(content)
+	
+	// Check if content starts with ---
+	if !strings.HasPrefix(contentStr, "---\n") && !strings.HasPrefix(contentStr, "---\r\n") {
+		return content, nil
+	}
+	
+	// Find the closing ---
+	lines := strings.Split(contentStr, "\n")
+	endIndex := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			endIndex = i
+			break
+		}
+	}
+	
+	// If no closing ---, return original content
+	if endIndex == -1 {
+		return content, nil
+	}
+	
+	// Extract frontmatter content
+	frontmatterLines := lines[1:endIndex]
+	frontmatterContent := strings.Join(frontmatterLines, "\n")
+	
+	// Parse YAML
+	var frontmatter Frontmatter
+	err := yaml.Unmarshal([]byte(frontmatterContent), &frontmatter)
+	if err != nil {
+		// If parsing fails, return original content
+		log.Printf("Failed to parse frontmatter: %v", err)
+		return content, nil
+	}
+	
+	// Return content without frontmatter
+	remainingLines := lines[endIndex+1:]
+	cleanContent := strings.Join(remainingLines, "\n")
+	
+	return []byte(cleanContent), frontmatter
+}
+
+// renderFrontmatter renders frontmatter as an HTML table
+func renderFrontmatter(frontmatter Frontmatter) []byte {
+	if len(frontmatter) == 0 {
+		return nil
+	}
+	
+	var buf bytes.Buffer
+	
+	// Create a styled info box for frontmatter
+	buf.WriteString(`<div class="frontmatter-box" style="background-color: #f6f8fa; border: 1px solid #d1d5da; border-radius: 6px; padding: 16px; margin-bottom: 16px; font-size: 14px;">`)
+	buf.WriteString(`<h4 style="margin-top: 0; margin-bottom: 12px; color: #24292e;">Document Information</h4>`)
+	buf.WriteString(`<table style="width: 100%; border-collapse: collapse;">`)
+	
+	for key, value := range frontmatter {
+		buf.WriteString(`<tr>`)
+		buf.WriteString(fmt.Sprintf(`<td style="padding: 4px 8px; font-weight: 600; color: #586069; vertical-align: top; width: 150px;">%s:</td>`, template.HTMLEscapeString(key)))
+		
+		// Format the value based on its type
+		var valueStr string
+		switch v := value.(type) {
+		case []interface{}:
+			// Handle arrays (like tags)
+			var items []string
+			for _, item := range v {
+				items = append(items, fmt.Sprintf("%v", item))
+			}
+			valueStr = strings.Join(items, ", ")
+		case map[string]interface{}:
+			// Handle nested objects
+			var items []string
+			for k, val := range v {
+				items = append(items, fmt.Sprintf("%s: %v", k, val))
+			}
+			valueStr = strings.Join(items, ", ")
+		case map[interface{}]interface{}:
+			// Handle nested objects (alternative format from YAML)
+			var items []string
+			for k, val := range v {
+				items = append(items, fmt.Sprintf("%v: %v", k, val))
+			}
+			valueStr = strings.Join(items, ", ")
+		default:
+			valueStr = fmt.Sprintf("%v", v)
+		}
+		
+		buf.WriteString(fmt.Sprintf(`<td style="padding: 4px 8px; color: #24292e;">%s</td>`, template.HTMLEscapeString(valueStr)))
+		buf.WriteString(`</tr>`)
+	}
+	
+	buf.WriteString(`</table>`)
+	buf.WriteString(`</div>`)
+	
+	return buf.Bytes()
 }
 
 func (m Parser) renderHook(w io.Writer, node ast.Node, entering bool) (ast.WalkStatus, bool) {
