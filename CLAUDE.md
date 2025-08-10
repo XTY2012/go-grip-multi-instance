@@ -46,12 +46,14 @@ go-grip is a lightweight Go tool for rendering Markdown files locally with GitHu
 
 ### Parser Extensions
 The markdown parser (`pkg/parser.go`) implements custom rendering for:
+- YAML frontmatter parsing and display as styled info box
 - Syntax highlighting via Chroma
 - Mermaid diagram support
 - GitHub-style alerts (note, tip, important, warning, caution)
 - Emoji replacement using generated mappings
 - Task list checkboxes
 - Proper heading anchors with GitHub-compatible IDs
+- Embedded HTML preservation and rendering
 
 ### Server Features
 - Serves on port 6419 by default (configurable via `-p`)
